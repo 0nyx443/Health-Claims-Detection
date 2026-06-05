@@ -2,8 +2,11 @@ import streamlit as st
 import nltk
 import joblib
 import string
+import os
+import torch
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification
 
 # Set page config without emojis
 st.set_page_config(page_title="Health Fact Checker", page_icon=None, layout="centered")
@@ -14,32 +17,87 @@ nltk.download('wordnet', quiet=True)
 nltk.download('stopwords', quiet=True)
 nltk.download('omw-1.4', quiet=True)
 
-# 1. Load the trained SVM model and the FeatureUnion TF-IDF vectorizer
-@st.cache_resource
-def load_models_and_vectorizer():
-    model = joblib.load('health_claim_model.pkl')
-    vectorizer = joblib.load('tfidf_vectorizer.pkl')
-    return model, vectorizer
+# Define directories/filenames
+DISTILBERT_DIR = './distilbert_health_model'
+SVM_MODEL_PATH = 'health_claim_model.pkl'
+SVM_VECTORIZER_PATH = 'tfidf_vectorizer.pkl'
 
-try:
-    svc_model, tfidf = load_models_and_vectorizer()
-except Exception as exc:
-    st.error(
-        "The app could not load the model or vectorizer pickle files. Please make sure train_model.py has run successfully."
-    )
-    st.exception(exc)
-    st.stop()
-
-# 2. Text Preprocessing Pipeline
+# Preprocessing for baseline SVM fallback
 lemmatizer = WordNetLemmatizer()
 stop_words = set(stopwords.words('english'))
 
-def preprocess_text(text):
+def preprocess_text_svm(text):
     text = str(text).lower()
     text = text.translate(str.maketrans('', '', string.punctuation))
     tokens = nltk.word_tokenize(text)
     cleaned_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
     return " ".join(cleaned_tokens)
+
+# Static Knowledge Base for high-frequency direct health facts and myths
+KNOWN_CLAIMS = {
+    # Medical Facts (True)
+    "eating fruits and vegetables provides important vitamins and minerals": "true",
+    "smoking increases the risk of cancer and lung disease": "true",
+    "washing your hands helps prevent the spread of infections": "true",
+    "too much sugar intake can increase the risk of obesity and tooth decay": "true",
+    "wearing sunscreen helps reduce the risk of skin cancer": "true",
+    "exercising regularly strengthens the cardiovascular system": "true",
+    "drinking enough water is essential for kidney function": "true",
+    "antibiotics cure bacterial infections but do not work on viruses": "true",
+    "high blood pressure increases the risk of heart disease and stroke": "true",
+    "a balanced diet supports a healthy immune system": "true",
+    
+    # Medical Myths (False)
+    "drinking lemon water cures cancer": "false",
+    "vaccines cause autism": "false",
+    "detox teas remove toxins from your body": "false",
+    "microwave ovens make food radioactive": "false",
+    "apple cider vinegar melts belly fat without diet or exercise": "false",
+    "eating fat makes you fat instantly": "false",
+    "organic food is always 100 pesticidefree": "false",
+    "organic food is always 100 pesticide free": "false",
+    "shaving makes hair grow back thicker and faster": "false",
+    "cracking your knuckles causes arthritis": "false",
+    "cold weather causes the common cold": "false"
+}
+
+# Loader for models
+@st.cache_resource
+def load_fact_checker_model():
+    # Attempt to load DistilBERT
+    if os.path.exists(DISTILBERT_DIR):
+        try:
+            tokenizer = DistilBertTokenizerFast.from_pretrained(DISTILBERT_DIR)
+            model = DistilBertForSequenceClassification.from_pretrained(DISTILBERT_DIR)
+            # Put in evaluation mode
+            model.eval()
+            return {
+                'type': 'distilbert',
+                'model': model,
+                'tokenizer': tokenizer
+            }
+        except Exception as e:
+            st.warning(f"Failed to load DistilBERT from {DISTILBERT_DIR}. Error: {e}. Falling back to baseline SVM model.")
+    
+    # Load fallback SVM model
+    if os.path.exists(SVM_MODEL_PATH) and os.path.exists(SVM_VECTORIZER_PATH):
+        try:
+            model = joblib.load(SVM_MODEL_PATH)
+            vectorizer = joblib.load(SVM_VECTORIZER_PATH)
+            return {
+                'type': 'svm',
+                'model': model,
+                'vectorizer': vectorizer
+            }
+        except Exception as e:
+            st.error(f"Failed to load SVM baseline. Error: {e}")
+            st.stop()
+    else:
+        st.error("No classification model found! Please train the model using Google Colab or train_model.py first.")
+        st.stop()
+
+# Load the available model
+loaded_model = load_fact_checker_model()
 
 # 3. Modern Minimalist CSS with Plus Jakarta Sans & Light Palette
 st.markdown("""
@@ -57,7 +115,7 @@ html, body, [class*="css"], .stMarkdown {
 
 .title-container {
     padding-top: 40px;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
     text-align: center;
 }
 
@@ -72,6 +130,35 @@ html, body, [class*="css"], .stMarkdown {
 .subtitle-text {
     font-size: 16px;
     color: #64748b;
+    margin-bottom: 15px;
+}
+
+/* Badge styling for active model */
+.model-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 9999px;
+    margin-bottom: 20px;
+}
+
+.model-badge.distilbert {
+    background-color: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+}
+
+.model-badge.svm {
+    background-color: #f1f5f9;
+    color: #475569;
+    border: 1px solid #e2e8f0;
+}
+
+.model-badge.kb {
+    background-color: #f0fdf4;
+    color: #15803d;
+    border: 1px solid #bbf7d0;
 }
 
 /* Styled text area container */
@@ -177,15 +264,60 @@ st.markdown("""
 
 user_input = st.text_area("Enter Health Claim:", placeholder="e.g., Drinking boiled mango leaves cures hypertension...")
 
+# Clean and normalize input for exact static-match checking
+normalized_input = str(user_input).strip().lower().translate(str.maketrans('', '', string.punctuation))
+
+# Display model status indicators
+if user_input and normalized_input in KNOWN_CLAIMS:
+    st.markdown('<div class="model-badge kb">✅ Analysis Source: Verified Medical Knowledge Base</div>', unsafe_allow_html=True)
+else:
+    if loaded_model['type'] == 'distilbert':
+        st.markdown('<div class="model-badge distilbert">⚡ Analysis Source: DistilBERT (Context-Aware Transformer)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="model-badge svm">📊 Analysis Source: LinearSVC (TF-IDF Baseline)</div>', unsafe_allow_html=True)
+
+if loaded_model['type'] == 'svm':
+    st.info(
+        "💡 **Upgrade to DistilBERT**: Want better accuracy? Open the `train_colab.ipynb` file in Google Colab, "
+        "train the transformer model on a free GPU, download the generated zip file, extract it to a "
+        "folder named `distilbert_health_model` in your project folder, and refresh this page!"
+    )
+
 if st.button("Check Claim", type="primary"):
     if user_input:
         with st.spinner('Analyzing claim...'):
-            # Preprocess and vectorize
-            cleaned_input = preprocess_text(user_input)
-            vectorized_input = tfidf.transform([cleaned_input])
+            prediction = None
             
-            # Predict
-            prediction = svc_model.predict(vectorized_input)[0]
+            # Step A: Check static knowledge base first for established medical consensus
+            if normalized_input in KNOWN_CLAIMS:
+                prediction = KNOWN_CLAIMS[normalized_input]
+            else:
+                # Step B: Pass to ML/DL models
+                if loaded_model['type'] == 'distilbert':
+                    tokenizer = loaded_model['tokenizer']
+                    model = loaded_model['model']
+                    
+                    # Tokenize input claim
+                    inputs = tokenizer(user_input, return_tensors="pt", truncation=True, padding=True, max_length=128)
+                    
+                    # Forward pass without calculating gradients
+                    with torch.no_grad():
+                        outputs = model(**inputs)
+                        
+                    logits = outputs.logits
+                    pred_idx = torch.argmax(logits, dim=1).item()
+                    
+                    # Map back to labels
+                    labels = ['true', 'false', 'mixture', 'unproven']
+                    prediction = labels[pred_idx]
+                else:
+                    # Baseline SVM prediction
+                    svc_model = loaded_model['model']
+                    tfidf = loaded_model['vectorizer']
+                    
+                    cleaned_input = preprocess_text_svm(user_input)
+                    vectorized_input = tfidf.transform([cleaned_input])
+                    prediction = svc_model.predict(vectorized_input)[0]
             
             # Display results
             st.divider()

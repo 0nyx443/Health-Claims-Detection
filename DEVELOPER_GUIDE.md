@@ -1,6 +1,6 @@
 # 🚀 Developer Guide: How to Run the Project Locally
 
-This guide explains how to set up and run the **Health Claim Fact-Checker** application on your local machine.
+This guide explains how to set up, run, and retrain the **Health Claim Fact-Checker** application on your local machine.
 
 ---
 
@@ -15,7 +15,7 @@ python --version
 
 ## ⚡ Quick Start: Running the Streamlit App
 
-Since the pre-trained vector mappings and the finalized machine learning model files (`glove.6B.50d.txt` and `health_claim_model.pkl`) are already committed to the repository, you can launch the app immediately without retraining.
+The project includes an automatic fallback system. If the advanced DistilBERT model is not trained/downloaded, it will automatically fall back to the pre-trained `LinearSVC` baseline model.
 
 ### 1. Clone the Repository
 Open your terminal or command prompt and run:
@@ -39,9 +39,9 @@ It is highly recommended to use a virtual environment to manage dependencies:
     ```
 
 ### 3. Install Required Dependencies
-Install the required scientific and NLP libraries:
+Install the required packages, including PyTorch and Hugging Face transformers:
 ```bash
-pip install pandas numpy scikit-learn nltk streamlit joblib requests
+pip install pandas numpy scikit-learn nltk streamlit joblib requests torch transformers accelerate
 ```
 
 ### 4. Run the Application
@@ -52,19 +52,32 @@ streamlit run app.py
 This will automatically open a tab in your web browser pointing to:
 👉 **Local URL**: [http://localhost:8501](http://localhost:8501)
 
+If you have not downloaded the DistilBERT model, the UI will display:
+`Active Model: LinearSVC (TF-IDF Baseline)` along with a reminder on how to upgrade.
+
 ---
 
-## 🔄 Optional: Retraining the Model
+## 🔄 Retraining the Models
 
-If you make modifications to the training dataset (`train.tsv`) or want to adjust the model parameters:
+### Option A: Fine-Tuning DistilBERT on Google Colab (Recommended)
+Training transformer models on a CPU takes hours. We recommend using a free GPU on Google Colab:
+1. Open [Google Colab](https://colab.research.google.com/).
+2. Upload the notebook file [train_colab.ipynb](file:///c:/Users/A-205/Downloads/Health-Claims-Detection/train_colab.ipynb) from this repository.
+3. Select a GPU runtime: Go to **Runtime** > **Change runtime type** > Select **T4 GPU** > Click Save.
+4. Upload `train.tsv` to the file explorer sidebar.
+5. Click **Runtime** > **Run all**.
+6. When complete, download the generated **`distilbert_health_model.zip`** from the file explorer sidebar.
+7. Unzip this file and place the extracted directory named `distilbert_health_model` directly in this repository's root directory.
+8. Refresh your Streamlit browser tab to run predictions using your newly trained DistilBERT transformer!
 
-1. Run the training script:
+### Option B: Local Training Fallback (LinearSVC baseline or CPU DistilBERT)
+If you make modifications to the training dataset (`train.tsv`) or want to run training locally:
+1. Run the local training script:
    ```bash
    python train_model.py
    ```
 2. The script will:
-   * Perform text cleaning (lowercasing, punctuation stripping, lemmatization).
-   * Evaluate the Linear Support Vector Classifier (LinearSVC) on a 30% test split.
-   * Retrain on 100% of the dataset.
-   * Save the newly updated `health_claim_model.pkl` and `tfidf_vectorizer.pkl` files.
-3. Refresh your Streamlit browser tab to run predictions using your newly trained model.
+   - Check if a local GPU is available (falls back to CPU if not).
+   - Split the dataset into 70% train / 30% test.
+   - Fine-tune DistilBERT for 5 epochs with early stopping (patience=2).
+   - Save the model weights to the `distilbert_health_model` folder.

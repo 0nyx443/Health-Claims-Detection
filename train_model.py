@@ -1,94 +1,136 @@
+import os
+import torch
 import pandas as pd
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import FeatureUnion
+import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.svm import LinearSVC
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-import joblib
-import string
-
-print("1. Loading NLTK resources...")
-nltk.download('punkt_tab', quiet=True)
-nltk.download('wordnet', quiet=True)
-nltk.download('stopwords', quiet=True)
-nltk.download('omw-1.4', quiet=True)
-
-print("2. Loading dataset...")
-df = pd.read_csv('train.tsv', sep='\t').dropna(subset=['claim', 'label']).rename(columns={'claim': 'text'})
-valid_labels = ['true', 'false', 'mixture', 'unproven']
-train_df = df[df['label'].isin(valid_labels)].copy()
-print(f"Dataset loaded. Total clean samples: {len(train_df)}")
-
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english'))
-
-def preprocess_text(text):
-    text = str(text).lower()
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    tokens = nltk.word_tokenize(text)
-    cleaned_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
-    return " ".join(cleaned_tokens)
-
-print("3. Cleaning text (this might take a few seconds)...")
-train_df['cleaned_text'] = train_df['text'].apply(preprocess_text)
-
-print("4. Splitting dataset for evaluation (70% train / 30% test)...")
-X_train_split, X_test_split, y_train_split, y_test_split = train_test_split(
-    train_df['cleaned_text'], 
-    train_df['label'], 
-    test_size=0.3, 
-    random_state=42, 
-    stratify=train_df['label']
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
+from transformers import (
+    DistilBertTokenizerFast, 
+    DistilBertForSequenceClassification, 
+    Trainer, 
+    TrainingArguments, 
+    EarlyStoppingCallback
 )
-print(f"Training split: {X_train_split.shape[0]} samples")
-print(f"Testing split: {X_test_split.shape[0]} samples")
 
-print("5. Evaluating model on split...")
-# Combined Word n-grams and Char n-grams TF-IDF vectorizer (unlimited features)
-word_vec = TfidfVectorizer(ngram_range=(1, 2), max_features=None)
-char_vec = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 5), max_features=None)
-union_eval = FeatureUnion([
-    ('word', word_vec),
-    ('char', char_vec)
-])
+def main():
+    print("1. Checking hardware acceleration...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    if device == "cpu":
+        print("\n⚠️  WARNING: No GPU detected. Local training on CPU may take hours.")
+        print("💡 Recommended: Use the 'train_colab.ipynb' notebook on Google Colab for free GPU training (~5-10 minutes).\n")
+    
+    print("2. Loading dataset...")
+    if not os.path.exists("train.tsv"):
+        raise FileNotFoundError("Could not find 'train.tsv' in the workspace directory.")
+        
+    df = pd.read_csv('train.tsv', sep='\t').dropna(subset=['claim', 'label']).rename(columns={'claim': 'text'})
+    valid_labels = ['true', 'false', 'mixture', 'unproven']
+    train_df = df[df['label'].isin(valid_labels)].copy()
+    print(f"Dataset loaded. Total clean samples: {len(train_df)}")
 
-# Vectorize splits
-X_train_vec = union_eval.fit_transform(X_train_split)
-X_test_vec = union_eval.transform(X_test_split)
+    # Map string labels to numeric classes
+    label_map = {'true': 0, 'false': 1, 'mixture': 2, 'unproven': 3}
+    train_df['label_idx'] = train_df['label'].map(label_map)
+    print("Class distribution:")
+    print(train_df['label'].value_counts())
 
-# Train LinearSVC Classifier on split
-svc_eval = LinearSVC(C=0.5, class_weight='balanced', random_state=42)
-svc_eval.fit(X_train_vec, y_train_split)
+    print("3. Splitting dataset for evaluation (70% train / 30% test)...")
+    X_train_texts, X_test_texts, y_train_labels, y_test_labels = train_test_split(
+        train_df['text'].values,
+        train_df['label_idx'].values,
+        test_size=0.3,
+        random_state=42,
+        stratify=train_df['label_idx'].values
+    )
+    print(f"Training split: {len(X_train_texts)} samples")
+    print(f"Testing split: {len(X_test_texts)} samples")
 
-# Predict and report metrics
-y_pred = svc_eval.predict(X_test_vec)
-accuracy = accuracy_score(y_test_split, y_pred)
-print("\n=== MODEL EVALUATION METRICS (30% Test Split) ===")
-print(f"Accuracy: {accuracy:.4f}")
-print("\nClassification Report:")
-print(classification_report(y_test_split, y_pred, labels=valid_labels, target_names=valid_labels))
-print("Confusion Matrix:")
-print(confusion_matrix(y_test_split, y_pred, labels=valid_labels))
-print("=================================================\n")
+    print("4. Loading DistilBERT tokenizer and tokenizing text...")
+    tokenizer = DistilBertTokenizerFast.from_pretrained('distilbert-base-uncased')
+    
+    # Using sequence length of 128 to save memory and compute time
+    train_encodings = tokenizer(list(X_train_texts), truncation=True, padding=True, max_length=128)
+    test_encodings = tokenizer(list(X_test_texts), truncation=True, padding=True, max_length=128)
 
-print("6. Retraining final model on 100% of cleaned data (full utilization)...")
-word_vec_final = TfidfVectorizer(ngram_range=(1, 2), max_features=None)
-char_vec_final = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 5), max_features=None)
-union_final = FeatureUnion([
-    ('word', word_vec_final),
-    ('char', char_vec_final)
-])
+    # PyTorch Dataset wrapper
+    class HealthClaimsDataset(torch.utils.data.Dataset):
+        def __init__(self, encodings, labels):
+            self.encodings = encodings
+            self.labels = labels
 
-X_full = union_final.fit_transform(train_df['cleaned_text'])
-y_full = train_df['label']
+        def __getitem__(self, idx):
+            item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+            item['labels'] = torch.tensor(self.labels[idx])
+            return item
 
-svc_final = LinearSVC(C=0.5, class_weight='balanced', random_state=42)
-svc_final.fit(X_full, y_full)
+        def __len__(self):
+            return len(self.labels)
 
-print("7. Saving final production files...")
-joblib.dump(svc_final, 'health_claim_model.pkl')
-joblib.dump(union_final, 'tfidf_vectorizer.pkl')
-print("SUCCESS: The final LinearSVC model and FeatureUnion vectorizer have been saved and are ready for Streamlit.")
+    train_dataset = HealthClaimsDataset(train_encodings, y_train_labels)
+    test_dataset = HealthClaimsDataset(test_encodings, y_test_labels)
+
+    print("5. Initializing DistilBERT model for sequence classification...")
+    model = DistilBertForSequenceClassification.from_pretrained('distilbert-base-uncased', num_labels=4)
+
+    def compute_metrics(eval_pred):
+        logits, labels = eval_pred
+        preds = np.argmax(logits, axis=1)
+        precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='macro')
+        acc = accuracy_score(labels, preds)
+        return {
+            'accuracy': acc,
+            'f1': f1,
+            'precision': precision,
+            'recall': recall
+        }
+
+    # Define Hugging Face TrainingArguments and Trainer
+    # On CPU we will restrict logging/checkpointing overhead
+    training_args = TrainingArguments(
+        output_dir='./results',
+        num_train_epochs=5,
+        per_device_train_batch_size=16,
+        per_device_eval_batch_size=32,
+        warmup_ratio=0.1,
+        weight_decay=0.01,
+        logging_dir='./logs',
+        logging_steps=50,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        save_total_limit=1,
+        report_to="none"
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=test_dataset,
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
+    )
+
+    print("6. Starting training...")
+    trainer.train()
+
+    print("7. Generating evaluation report...")
+    eval_results = trainer.predict(test_dataset)
+    predictions = np.argmax(eval_results.predictions, axis=1)
+
+    print("\n=== FINAL EVALUATION METRICS ===")
+    print(classification_report(y_test_labels, predictions, target_names=valid_labels))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_test_labels, predictions))
+    print("================================\n")
+
+    output_dir = './distilbert_health_model'
+    print(f"8. Saving trained model and tokenizer to {output_dir}...")
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    print("SUCCESS: The final DistilBERT model and tokenizer have been saved.")
+
+if __name__ == '__main__':
+    main()
