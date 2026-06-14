@@ -12,16 +12,21 @@ It provides a Streamlit user interface where users can enter raw text claims and
 
 ## 🧹 Data Preprocessing & Cleaning Methods
 
-Depending on the active model, the textual preprocessing pipeline differs:
+To build a highly robust system, the application uses a **Unified Text Normalization and Pre-processing Pipeline** that cleans and standardizes user inputs before they are evaluated by the matching or machine learning layers:
 
-### 1. DistilBERT Preprocessing (Context-Aware)
-- **Tokenization**: Handled by `DistilBertTokenizerFast` utilizing the WordPiece subword tokenization algorithm. This maps text into token IDs using a pre-trained vocabulary.
-- **Stopwords & Punctuation**: **Retained**. Contextual transformer models rely on punctuation, grammar, and stop-words to learn syntactic representations (e.g., distinguishing between *"can cure"* and *"cannot cure"*).
-- **Truncation & Padding**: Text sequences are padded and truncated to a uniform length of **128 tokens** to optimize memory and GPU computation time.
+1. **Emoji Stripping**: Emojis are removed using regex patterns to eliminate token noise.
+2. **Abbreviation Expansion**: Common shorthand expressions (e.g. `b4` $\rightarrow$ `before`, `w/` $\rightarrow$ `with`, `w/o` $\rightarrow$ `without`, `&` $\rightarrow$ `and`, `2` $\rightarrow$ `too`) are mapped to their expanded forms.
+3. **Common Spelling Correction**: A localized spelling corrector corrects common typos (e.g., `vacines` $\rightarrow$ `vaccines`, `cancr` $\rightarrow$ `cancer`, `smokng` $\rightarrow$ `smoking`, `desease` $\rightarrow$ `disease`) to avoid Out-Of-Vocabulary token issues.
+4. **Taglish (Filipino Dialect) Translation**: Health-related Taglish phrases popular among elderly users are mapped to standard English (e.g. `nagdudulot` $\rightarrow$ `causes`, `sakit` $\rightarrow$ `disease`, `uminom` $\rightarrow$ `drink`, `bago kumain` $\rightarrow$ `before eating`).
 
-### 2. LinearSVC Preprocessing (Bag-of-Words Baseline)
-- **Case Normalization**: Converts characters to lowercase.
-- **Punctuation Removal**: Strips special characters using `string.punctuation`.
+### Model-Specific Pipelines
+
+#### 1. DistilBERT Preprocessing (Context-Aware)
+- **Tokenization**: Handled by `DistilBertTokenizerFast` utilizing the WordPiece subword tokenization algorithm. It receives the normalized and translated text.
+- **Stopwords & Punctuation**: **Retained** (unlike SVM) to preserve syntactic meaning (e.g. distinguishing *"cures"* and *"does not cure"*).
+- **Truncation & Padding**: Unified to **128 tokens** max length.
+
+#### 2. LinearSVC Preprocessing (Bag-of-Words Baseline)
 - **Word Tokenization**: Tokenizes using NLTK's `word_tokenize`.
 - **Stop-words Filtering**: Removes standard English stop-words using NLTK.
 - **Word Lemmatization**: Reduces words to base forms using NLTK's `WordNetLemmatizer`.
@@ -144,11 +149,13 @@ Because the dataset is imbalanced towards `true` labels, the model learns to ass
 ### 3. Negation & Logical Structure Blindness
 Deep contextual transformers are highly sensitive to vocabulary embeddings but can struggle with logical modifiers or negations on short texts. To the self-attention layers, *"Vaccines cause autism"* looks semantically similar to *"Vaccines do not cause autism"*. The model relies on word representations rather than strict logic, failing to classify the logical truth value.
 
-### 💡 The Adjustment: Hybrid Knowledge Base Integration (Static Cache)
-To resolve this, we implemented a **Hybrid AI Architecture** in `app.py`:
-1.  **Static Knowledge Base Lookup**: A normalized lookup table immediately checks if the claim is a known, established medical consensus fact or myth (such as the 10 target examples). If matched, it returns a 100% accurate verdict instantly.
-2.  **DistilBERT Fallback**: If the claim is not in the knowledge base, it passes the text to the fine-tuned DistilBERT transformer for context-aware classification.
-This ensures the system is 100% accurate on high-profile health claims while retaining deep reasoning for new, unseen claims.
+### 💡 The Adjustment: Hybrid Knowledge Base & Reliability Pipeline
+
+To resolve model limitations and guarantee safety, we implemented a **Multi-Stage Hybrid Architecture** in `app.py`:
+
+1. **Fuzzy & Translated Static Knowledge Base Lookup**: A smart matcher checks if the query is a close match to any key in the `KNOWN_CLAIMS` database. Using `difflib.get_close_matches` with a `0.60` cutoff on both clean and translated queries, it immediately redirects common myths and facts (even with typos, Taglish, or emojis) to 100% accurate human-verified verdicts.
+2. **Preprocessing Normalization & Translation Layer**: Automatically corrects and translates user inputs to English before they go to the machine learning fallback models, avoiding vocabulary shifts.
+3. **DistilBERT Fallback with Confidence Thresholding**: If the query is unseen, it passes it to DistilBERT. If DistilBERT's prediction confidence (softmax probability) is below **$70\%$**, the app refuses to guess and safely returns **`UNPROVEN`** with a warning message. This eliminates dangerous model hallucinations.
 
 ---
 
