@@ -74,7 +74,7 @@ To build a highly robust system, the application uses a **Unified Text Normaliza
 
 ### Step 1: Train DistilBERT on Google Colab (Recommended)
 1. Open [Google Colab](https://colab.research.google.com/).
-2. Upload the file [train_colab.ipynb](file:///c:/Users/A-205/Downloads/Health-Claims-Detection/train_colab.ipynb) from this repository.
+2. Upload the file [train_colab.ipynb](file:///c:/Users/MARK/OneDrive/Desktop/NLP_FactChecker/train_colab.ipynb) from this repository.
 3. Select a GPU runtime: Go to **Runtime** > **Change runtime type** > select **T4 GPU** > Click Save.
 4. Upload `train.tsv` using the files folder icon on Colab's left sidebar.
 5. Click **Runtime** > **Run all**.
