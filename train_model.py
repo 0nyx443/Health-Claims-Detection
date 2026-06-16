@@ -21,10 +21,9 @@ def main():
         print("💡 Recommended: Use the 'train_colab.ipynb' notebook on Google Colab for free GPU training (~5-10 minutes).\n")
     
     print("2. Loading dataset...")
-    if not os.path.exists("train.tsv"):
-        raise FileNotFoundError("Could not find 'train.tsv' in the workspace directory.")
-        
-    df = pd.read_csv('train.tsv', sep='\t').dropna(subset=['claim', 'label']).rename(columns={'claim': 'text'})
+    dataset_file = "train_balanced.tsv" if os.path.exists("train_balanced.tsv") else "train.tsv"
+    print(f"Loading data from: {dataset_file}")
+    df = pd.read_csv(dataset_file, sep='\t').dropna(subset=['claim', 'label']).rename(columns={'claim': 'text'})
     valid_labels = ['true', 'false', 'mixture', 'unproven']
     train_df = df[df['label'].isin(valid_labels)].copy()
     print(f"Dataset loaded. Total clean samples: {len(train_df)}")

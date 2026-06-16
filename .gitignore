@@ -4,3 +4,5 @@ __pycache__/
 .DS_Store
 distilbert_health_model/
 train_original.tsv
+data_cache/
+train_balanced.tsv
