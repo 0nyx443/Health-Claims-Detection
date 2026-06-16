@@ -62,7 +62,7 @@ If you have not downloaded the DistilBERT model, the UI will display:
 ### Option A: Fine-Tuning DistilBERT on Google Colab (Recommended)
 Training transformer models on a CPU takes hours. We recommend using a free GPU on Google Colab:
 1. Open [Google Colab](https://colab.research.google.com/).
-2. Upload the notebook file [train_colab.ipynb](file:///c:/Users/A-205/Downloads/Health-Claims-Detection/train_colab.ipynb) from this repository.
+2. Upload the notebook file [train_colab.ipynb](file:///c:/Users/MARK/OneDrive/Desktop/NLP_FactChecker/train_colab.ipynb) from this repository.
 3. Select a GPU runtime: Go to **Runtime** > **Change runtime type** > Select **T4 GPU** > Click Save.
 4. Upload `train.tsv` to the file explorer sidebar.
 5. Click **Runtime** > **Run all**.
