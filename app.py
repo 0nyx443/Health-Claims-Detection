@@ -26,7 +26,13 @@ except ImportError:
 
 # Set page config without emojis
 st.set_page_config(page_title="Health Fact Checker", page_icon=None, layout="centered")
-
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 3rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 # Download resources silently
 nltk.download('punkt_tab', quiet=True)
 nltk.download('wordnet', quiet=True)
@@ -345,10 +351,36 @@ def load_fact_checker_model():
 # Load the available model
 loaded_model = load_fact_checker_model()
 
+def get_verdict_explanation(verdict):
+    verdict = str(verdict).lower()
+    if verdict == "true":
+        return "The claim is likely supported based on the model and available training data."
+    if verdict == "false":
+        return "The claim is likely contradicted based on the model and available training data."
+    if verdict == "mixture":
+        return "The claim may be partly true, incomplete, or missing important context."
+    return "The system does not have enough confidence to make a strong judgment."
+
+def get_active_model_name():
+    if loaded_model["type"] == "distilbert":
+        return "DistilBERT"
+    return "LinearSVC fallback"
+
+def get_model_status_rows():
+    distilbert_status = "active" if loaded_model["type"] == "distilbert" else "unavailable"
+    svm_available = os.path.exists(SVM_MODEL_PATH) and os.path.exists(SVM_VECTORIZER_PATH)
+    return [
+        ("DistilBERT", distilbert_status),
+        ("LinearSVC fallback", "available" if svm_available else "unavailable"),
+        ("Knowledge base", "available"),
+        ("Confidence threshold", f"{DISTILBERT_CONFIDENCE_THRESHOLD:.0%}"),
+        ("Risky word check", "enabled"),
+    ]
+
 st.markdown("""
 <style>
 .stApp {
-    background-color: #f7f7f7;
+    background-color: #f6f6f6;
 }
 
 html, body, [class*="css"], .stMarkdown {
@@ -356,9 +388,14 @@ html, body, [class*="css"], .stMarkdown {
     color: #111111;
 }
 
-.title-container {
+.block-container {
+    max-width: 1120px;
     padding-top: 32px;
-    margin-bottom: 24px;
+    padding-bottom: 32px;
+}
+
+.title-container {
+    margin-bottom: 22px;
 }
 
 .title-text {
@@ -372,10 +409,16 @@ html, body, [class*="css"], .stMarkdown {
 .subtitle-text {
     font-size: 16px;
     color: #555555;
-    margin-bottom: 0;
+    margin-bottom: 8px;
 }
 
-.input-card, .result-card, .footer-note {
+.status-line {
+    color: #444444;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.panel, .result-card, .footer-note, .analysis-steps {
     border: 1px solid #d8d8d8;
     background-color: #ffffff;
     border-radius: 8px;
@@ -389,6 +432,51 @@ html, body, [class*="css"], .stMarkdown {
     line-height: 1.5;
 }
 
+.section-title {
+    color: #111111;
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.small-title {
+    color: #111111;
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.side-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid #eeeeee;
+    padding: 8px 0;
+    font-size: 13px;
+}
+
+.side-row:first-of-type {
+    border-top: 0;
+}
+
+.side-label {
+    color: #555555;
+}
+
+.side-value {
+    color: #111111;
+    font-weight: 600;
+    text-align: right;
+}
+
+.how-list {
+    margin: 0;
+    padding-left: 18px;
+    color: #333333;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 .result-label {
     color: #666666;
     font-size: 13px;
@@ -398,11 +486,23 @@ html, body, [class*="css"], .stMarkdown {
     margin-bottom: 4px;
 }
 
+.result-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 18px;
+    margin-top: 12px;
+}
+
+.result-cell {
+    border-top: 1px solid #eeeeee;
+    padding-top: 12px;
+}
+
 .result-value {
     color: #111111;
     font-size: 18px;
     font-weight: 650;
-    margin-bottom: 16px;
+    margin-bottom: 6px;
 }
 
 .final-value {
@@ -410,10 +510,35 @@ html, body, [class*="css"], .stMarkdown {
     margin-bottom: 18px;
 }
 
+.verdict-note {
+    color: #333333;
+    font-size: 15px;
+    line-height: 1.6;
+    margin-bottom: 12px;
+}
+
 .reason-text {
     color: #222222;
     font-size: 15px;
     line-height: 1.6;
+}
+
+.evidence-box {
+    border-top: 1px solid #eeeeee;
+    margin-top: 16px;
+    padding-top: 14px;
+}
+
+.analysis-steps {
+    margin-top: 12px;
+}
+
+.analysis-steps ul {
+    margin: 8px 0 0 18px;
+    padding: 0;
+    color: #333333;
+    font-size: 13px;
+    line-height: 1.7;
 }
 
 .stTextArea textarea {
@@ -430,134 +555,300 @@ html, body, [class*="css"], .stMarkdown {
 }
 
 .stButton button {
-    background-color: #111111 !important;
-    color: #ffffff !important;
-    border: none !important;
+    background-color: #ffffff !important;
+    color: #111111 !important;
+    border: 1px solid #cfcfcf !important;
     border-radius: 6px !important;
-    padding: 10px 24px !important;
+    padding: 9px 18px !important;
     font-weight: 600 !important;
-    font-size: 15px !important;
+    font-size: 14px !important;
+    box-shadow: none !important;
 }
 
 .stButton button:hover {
+    background-color: #f4f4f4 !important;
+    border-color: #999999 !important;
+    color: #111111 !important;
+}
+
+.stButton button[kind="primary"] {
+    background-color: #111111 !important;
+    color: #ffffff !important;
+    border-color: #111111 !important;
+}
+
+.stButton button[kind="primary"]:hover {
     background-color: #333333 !important;
+    color: #ffffff !important;
+}
+
+@media (max-width: 760px) {
+    .result-grid {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
+active_model_name = get_active_model_name()
+
+st.markdown(f"""
 <div class="title-container">
     <div class="title-text">Health Claim Fact-Checker</div>
     <div class="subtitle-text">Check health-related claims using a trained text classifier.</div>
+    <div class="status-line">
+        Active model: <strong>{html.escape(active_model_name)}</strong><br>
+        Evidence database: <strong>Local dataset / Knowledge base</strong>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-user_input = st.text_area("Enter health claim", placeholder="e.g., Vitamin C cures colds")
+EXAMPLE_CLAIMS = [
+    "Vitamin C cures colds",
+    "Vaccines prevent disease",
+    "Garlic cures cancer",
+    "Smoking increases the risk of lung cancer",
+    "Cold weather causes the common cold",
+]
 
-preview_kb_match = check_static_kb(user_input) if user_input else None
-preview_source = "Knowledge Base" if preview_kb_match else get_base_model_source()
-st.markdown(
-    f'<div class="muted">Current source: {html.escape(preview_source)}</div>',
-    unsafe_allow_html=True,
-)
+if "claim_input" not in st.session_state:
+    st.session_state.claim_input = ""
 
-if loaded_model.get("note"):
-    with st.expander("Model status"):
-        st.write(loaded_model["note"])
+def set_example_claim(claim):
+    st.session_state.claim_input = claim
 
-if st.button("Check Claim", type="primary"):
-    if user_input:
-        with st.spinner('Analyzing claim...'):
-            model_prediction = None
-            final_verdict = "unproven"
-            reason = "The system could not determine a reliable verdict."
-            confidence_score = None
-            kb_match = check_static_kb(user_input)
-            source_used = "Knowledge Base" if kb_match else get_base_model_source()
-            normalized_input = clean_and_normalize_text(user_input)
-            translated_input = translate_taglish_to_english(normalized_input)
-            risky_terms = detect_risky_words(user_input)
+def clear_claim():
+    st.session_state.claim_input = ""
 
-            if kb_match is not None:
-                model_prediction = kb_match["label"]
-            else:
-                # Step B: Pass to ML/DL models
-                if loaded_model['type'] == 'distilbert':
-                    tokenizer = loaded_model['tokenizer']
-                    model = loaded_model['model']
-                    
-                    # Tokenize input claim
-                    inputs = tokenizer(translated_input, return_tensors="pt", truncation=True, padding=True, max_length=128)
-                    
-                    # Forward pass without calculating gradients
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                        
-                    logits = outputs.logits
-                    probs = torch.softmax(logits, dim=1)
-                    max_prob, pred_idx = torch.max(probs, dim=1)
-                    confidence_score = max_prob.item()
-                    
-                    # Map back to labels
-                    labels = ['true', 'false', 'mixture', 'unproven']
-                    model_prediction = labels[pred_idx.item()]
-                else:
-                    # Baseline SVM prediction
-                    svc_model = loaded_model['model']
-                    tfidf = loaded_model['vectorizer']
-                    
-                    cleaned_input = preprocess_text_svm(user_input)
-                    vectorized_input = tfidf.transform([cleaned_input])
-                    model_prediction = svc_model.predict(vectorized_input)[0]
+main_col, side_col = st.columns([2.1, 1], gap="large")
 
-            final_verdict, reason = determine_final_verdict(
-                source_used,
-                model_prediction,
-                confidence=confidence_score,
-                kb_match=kb_match,
-                risky_terms=risky_terms,
-            )
+with main_col:
+    st.markdown(
+        """
+        <div class="panel">
+            <div class="section-title">Submit a claim</div>
+            <div class="muted">Enter one health-related statement. Supports English and simple Taglish.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-            confidence_text = get_confidence_text(source_used, confidence_score)
+    user_input = st.text_area(
+        "Enter health claim",
+        placeholder="e.g., Vitamin C cures colds",
+        key="claim_input",
+    )
+
+    preview_kb_match = check_static_kb(user_input) if user_input else None
+    preview_source = "Knowledge Base" if preview_kb_match else get_base_model_source()
+    st.markdown(
+        f'<div class="muted">Current source: {html.escape(preview_source)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    button_col, clear_col = st.columns([1, 1])
+    with button_col:
+        check_clicked = st.button("Check Claim", type="primary", use_container_width=True)
+    with clear_col:
+        st.button("New Claim / Clear", on_click=clear_claim, use_container_width=True)
+
+    if loaded_model.get("note"):
+        st.markdown(
+            f'<div class="muted">Model note: {html.escape(loaded_model["note"])}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if check_clicked:
+        if user_input:
             st.markdown(
-                f"""
-                <div class="result-card">
-                    <div class="result-label">Final verdict</div>
-                    <div class="result-value final-value">{html.escape(format_label(final_verdict))}</div>
-                    <div class="result-label">Model prediction</div>
-                    <div class="result-value">{html.escape(format_label(model_prediction))}</div>
-                    <div class="result-label">Confidence</div>
-                    <div class="result-value">{html.escape(confidence_text)}</div>
-                    <div class="result-label">Source</div>
-                    <div class="result-value">{html.escape(source_used)}</div>
-                    <div class="result-label">Reason</div>
-                    <div class="reason-text">{html.escape(reason)}</div>
+                """
+                <div class="analysis-steps">
+                    <div class="small-title">Analyzing claim</div>
+                    <ul>
+                        <li>Normalizing input</li>
+                        <li>Checking knowledge base</li>
+                        <li>Running classifier</li>
+                        <li>Preparing result</li>
+                    </ul>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+            with st.spinner('Analyzing claim...'):
+                model_prediction = None
+                final_verdict = "unproven"
+                reason = "The system could not determine a reliable verdict."
+                confidence_score = None
+                kb_match = check_static_kb(user_input)
+                source_used = "Knowledge Base" if kb_match else get_base_model_source()
+                normalized_input = clean_and_normalize_text(user_input)
+                translated_input = translate_taglish_to_english(normalized_input)
+                risky_terms = detect_risky_words(user_input)
 
-            with st.expander("Details"):
-                st.write(f"Normalized input: {normalized_input}")
-                st.write(f"Translated input: {translated_input}")
-                st.write(f"Source used: {source_used}")
-                st.write(f"Raw model prediction: {model_prediction}")
-                st.write(f"Final verdict: {final_verdict}")
-                st.write(f"Active model folder status: {'found' if os.path.exists(DISTILBERT_DIR) else 'not found'}")
-                if confidence_score is not None:
-                    st.write(f"Confidence score: {confidence_score:.4f}")
-                else:
-                    st.write("Confidence score: not available")
-                if risky_terms:
-                    st.write(f"Risky wording detected: {', '.join(risky_terms)}")
-                else:
-                    st.write("Risky wording detected: none")
                 if kb_match is not None:
-                    st.write(f"Knowledge-base match type: {kb_match['match_type']}")
-                    st.write(f"Matched claim: {kb_match['matched_claim']}")
-                    st.write(f"Similarity score: {kb_match['similarity']:.2f}")
-    else:
-        st.warning("Please enter a claim into the text box first.")
+                    model_prediction = kb_match["label"]
+                else:
+                    # Step B: Pass to ML/DL models
+                    if loaded_model['type'] == 'distilbert':
+                        tokenizer = loaded_model['tokenizer']
+                        model = loaded_model['model']
+                        
+                        # Tokenize input claim
+                        inputs = tokenizer(translated_input, return_tensors="pt", truncation=True, padding=True, max_length=128)
+                        
+                        # Forward pass without calculating gradients
+                        with torch.no_grad():
+                            outputs = model(**inputs)
+                            
+                        logits = outputs.logits
+                        probs = torch.softmax(logits, dim=1)
+                        max_prob, pred_idx = torch.max(probs, dim=1)
+                        confidence_score = max_prob.item()
+                        
+                        # Map back to labels
+                        labels = ['true', 'false', 'mixture', 'unproven']
+                        model_prediction = labels[pred_idx.item()]
+                    else:
+                        # Baseline SVM prediction
+                        svc_model = loaded_model['model']
+                        tfidf = loaded_model['vectorizer']
+                        
+                        cleaned_input = preprocess_text_svm(user_input)
+                        vectorized_input = tfidf.transform([cleaned_input])
+                        model_prediction = svc_model.predict(vectorized_input)[0]
+
+                final_verdict, reason = determine_final_verdict(
+                    source_used,
+                    model_prediction,
+                    confidence=confidence_score,
+                    kb_match=kb_match,
+                    risky_terms=risky_terms,
+                )
+
+                confidence_text = get_confidence_text(source_used, confidence_score)
+                verdict_explanation = get_verdict_explanation(final_verdict)
+                if kb_match is not None:
+                    evidence_html = f"""
+                    <div class="evidence-box">
+                        <div class="result-label">Related evidence</div>
+                        <div class="reason-text">Matched local knowledge-base claim: {html.escape(kb_match['matched_claim'])}</div>
+                        <div class="muted">Match type: {html.escape(kb_match['match_type'])}; similarity: {kb_match['similarity']:.2f}</div>
+                    </div>
+                    """
+                else:
+                    evidence_html = """
+                    <div class="evidence-box">
+                        <div class="result-label">Related evidence</div>
+                        <div class="muted">No source evidence is available for this prediction.</div>
+                    </div>
+                    """
+
+                st.markdown(
+                    f"""
+                    <div class="result-card">
+                        <div class="result-label">Final verdict</div>
+                        <div class="result-value final-value">{html.escape(format_label(final_verdict))}</div>
+                        <div class="verdict-note">{html.escape(verdict_explanation)}</div>
+                        <div class="result-grid">
+                            <div class="result-cell">
+                                <div class="result-label">Model prediction</div>
+                                <div class="result-value">{html.escape(format_label(model_prediction))}</div>
+                            </div>
+                            <div class="result-cell">
+                                <div class="result-label">Confidence</div>
+                                <div class="result-value">{html.escape(confidence_text)}</div>
+                            </div>
+                            <div class="result-cell">
+                                <div class="result-label">Source</div>
+                                <div class="result-value">{html.escape(source_used)}</div>
+                            </div>
+                            <div class="result-cell">
+                                <div class="result-label">Reason</div>
+                                <div class="reason-text">{html.escape(reason)}</div>
+                            </div>
+                        </div>
+                        {evidence_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                with st.expander("Details"):
+                    st.write(f"Normalized input: {normalized_input}")
+                    st.write(f"Translated input: {translated_input}")
+                    st.write(f"Source used: {source_used}")
+                    st.write(f"Raw model prediction: {model_prediction}")
+                    st.write(f"Final verdict: {final_verdict}")
+                    st.write(f"Active model folder status: {'found' if os.path.exists(DISTILBERT_DIR) else 'not found'}")
+                    if confidence_score is not None:
+                        st.write(f"Confidence score: {confidence_score:.4f}")
+                    else:
+                        st.write("Confidence score: not available")
+                    if risky_terms:
+                        st.write(f"Risky wording detected: {', '.join(risky_terms)}")
+                    else:
+                        st.write("Risky wording detected: none")
+                    if kb_match is not None:
+                        st.write(f"Knowledge-base match type: {kb_match['match_type']}")
+                        st.write(f"Matched claim: {kb_match['matched_claim']}")
+                        st.write(f"Similarity score: {kb_match['similarity']:.2f}")
+        else:
+            st.warning("Please enter a claim into the text box first.")
+
+with side_col:
+    status_rows_html = "\n".join(
+        f"""
+        <div class="side-row">
+            <span class="side-label">{html.escape(label)}</span>
+            <span class="side-value">{html.escape(value)}</span>
+        </div>
+        """
+        for label, value in get_model_status_rows()
+    )
+    st.markdown(
+        f"""
+        <div class="panel">
+            <div class="small-title">Model status</div>
+            {status_rows_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="panel">
+            <div class="small-title">How it works</div>
+            <ol class="how-list">
+                <li>Enter a health claim.</li>
+                <li>The app normalizes the text.</li>
+                <li>It checks the knowledge base.</li>
+                <li>If needed, it runs DistilBERT.</li>
+                <li>It applies confidence and safety rules.</li>
+                <li>It shows the final verdict and reason.</li>
+            </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="panel">
+            <div class="small-title">Example claims</div>
+            <div class="muted">Use these to test common paths through the app.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    for claim in EXAMPLE_CLAIMS:
+        st.button(
+            claim,
+            key=f"example_{claim}",
+            on_click=set_example_claim,
+            args=(claim,),
+            use_container_width=True,
+        )
 
 st.markdown(
     '<div class="footer-note muted">This tool is for educational use only and should not be used as medical advice.</div>',
